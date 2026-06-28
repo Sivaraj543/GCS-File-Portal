@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% set title = "Login | GCS File Portal" %}
+
+{% block content %}
+<section class="auth-panel">
+  <div>
+    <p class="eyebrow">Secure cloud storage</p>
+    <h1>GCS File Portal</h1>
+    <p class="lede">Sign in to upload, view, and download files stored in Google Cloud Storage.</p>
+  </div>
+
+  <form class="card login-card" method="post">
+    <label>
+      Username
+      <input name="username" type="text" autocomplete="username" required>
+    </label>
+    <label>
+      Password
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit">Sign in</button>
+    <p class="auth-switch">New user? <a href="{{ url_for('register') }}">Create an account</a></p>
+  </form>
+</section>
+{% endblock %}
