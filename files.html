@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+    <title>Files | Local File Portal</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <h1>Uploaded Files</h1>
+
+    <!-- Upload form -->
+    <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+        <input type="file" name="file">
+        <button type="submit">Upload</button>
+    </form>
+
+    <!-- Show files -->
+    {% if files %}
+      <ul>
+      {% for f in files %}
+        <li>
+          {{ f.name }} ({{ f.size }} bytes, updated {{ f.updated.strftime('%Y-%m-%d %H:%M:%S') }})
+          <a href="{{ url_for('download', object_name=f.object_name) }}">Download</a>
+        </li>
+      {% endfor %}
+      </ul>
+    {% else %}
+      <p>No files yet. Upload a file to store it locally.</p>
+    {% endif %}
+
+    <p>Storage: {{ bucket }}</p>
+    {% if config_error %}
+      <p style="color:red;">Error: {{ config_error }}</p>
+    {% endif %}
+
+    <!-- Sign out -->
+    <form action="{{ url_for('logout') }}" method="post">
+        <button type="submit">Sign out</button>
+    </form>
+</body>
+</html>
