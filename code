@@ -1,0 +1,210 @@
+import os
+import sqlite3
+from datetime import datetime
+from functools import wraps
+from pathlib import Path
+
+from dotenv import load_dotenv
+from flask import (
+    Flask,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    session,
+    url_for,
+)
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
+
+load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-me")
+app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
+app.config["DATABASE"] = os.path.join(app.instance_path, "users.db")
+
+# Local folder where uploaded files will be saved
+UPLOAD_FOLDER = os.path.join(app.instance_path, "uploads")
+
+
+def init_db():
+    os.makedirs(app.instance_path, exist_ok=True)
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    with sqlite3.connect(app.config["DATABASE"]) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+def find_user(username):
+    with sqlite3.connect(app.config["DATABASE"]) as connection:
+        connection.row_factory = sqlite3.Row
+        return connection.execute(
+            "SELECT id, username, password_hash FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+
+
+def create_user(username, password):
+    with sqlite3.connect(app.config["DATABASE"]) as connection:
+        connection.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+            (username, generate_password_hash(password)),
+        )
+
+
+init_db()
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped_view(**kwargs):
+        if not session.get("user"):
+            return redirect(url_for("login"))
+        return view(**kwargs)
+    return wrapped_view
+
+
+@app.route("/", methods=["GET"])
+def index():
+    if session.get("user"):
+        return redirect(url_for("files"))
+    return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        user = find_user(username)
+
+        if user and check_password_hash(user["password_hash"], password):
+            session.clear()
+            session["user"] = user["username"]
+            return redirect(url_for("files"))
+
+        flash("Invalid username or password.", "error")
+
+    return render_template("login.html")
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if len(username) < 3:
+            flash("Username must be at least 3 characters.", "error")
+            return render_template("register.html")
+
+        if len(password) < 6:
+            flash("Password must be at least 6 characters.", "error")
+            return render_template("register.html")
+
+        if password != confirm_password:
+            flash("Passwords do not match.", "error")
+            return render_template("register.html")
+
+        try:
+            create_user(username, password)
+        except sqlite3.IntegrityError:
+            flash("That username is already registered.", "error")
+            return render_template("register.html")
+
+        flash("Account created. Please sign in.", "success")
+        return redirect(url_for("login"))
+
+    return render_template("register.html")
+
+
+@app.route("/logout", methods=["POST"])
+@login_required
+def logout():
+    session.clear()
+    flash("Signed out successfully.", "success")
+    return redirect(url_for("login"))
+
+
+@app.route("/files", methods=["GET"])
+@login_required
+def files():
+    try:
+        file_rows = []
+        for filepath in Path(UPLOAD_FOLDER).iterdir():
+            if filepath.is_file():
+                stat = filepath.stat()
+                file_rows.append({
+                    "name": filepath.name,
+                    "object_name": filepath.name,
+                    "size": stat.st_size,
+                    "updated": datetime.fromtimestamp(stat.st_mtime),
+                    "content_type": "application/octet-stream",
+                })
+
+        file_rows.sort(key=lambda x: x["updated"], reverse=True)
+
+        return render_template(
+            "files.html",
+            files=file_rows,
+            bucket=f"Local Storage ({UPLOAD_FOLDER})",
+        )
+
+    except Exception as exc:
+        return render_template(
+            "files.html",
+            files=[],
+            bucket="Unavailable",
+            config_error=str(exc),
+        )
+
+
+@app.route("/upload", methods=["POST"])
+@login_required
+def upload():
+    uploaded_file = request.files.get("file")
+    if not uploaded_file or not uploaded_file.filename:
+        flash("Choose a file before uploading.", "error")
+        return redirect(url_for("files"))
+
+    try:
+        filename = secure_filename(uploaded_file.filename)
+        save_path = os.path.join(UPLOAD_FOLDER, filename)
+        uploaded_file.save(save_path)
+        flash(f"{filename} uploaded successfully.", "success")
+    except Exception as exc:
+        flash(f"Upload failed: {exc}", "error")
+
+    return redirect(url_for("files"))
+
+
+@app.route("/download/<path:object_name>", methods=["GET"])
+@login_required
+def download(object_name):
+    try:
+        safe_name = secure_filename(object_name)
+        file_path = os.path.join(UPLOAD_FOLDER, safe_name)
+
+        if not os.path.exists(file_path):
+            flash("File not found.", "error")
+            return redirect(url_for("files"))
+
+        return send_file(file_path, as_attachment=True, download_name=safe_name)
+    except Exception as exc:
+        flash(f"Download failed: {exc}", "error")
+        return redirect(url_for("files"))
+
+
+if __name__ == "__main__":
+    app.run(debug=os.getenv("FLASK_DEBUG", "1") == "1", port=5002)
